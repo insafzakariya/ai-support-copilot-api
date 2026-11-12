@@ -106,6 +106,18 @@ class QdrantRepository:
         except Exception as exc:
             raise VectorStoreError("Qdrant collection is unavailable") from exc
 
+    def truncate(self) -> None:
+        try:
+            collections = self.client.get_collections().collections
+            names = {c.name for c in collections}
+            if self.settings.qdrant_collection in names:
+                self.client.delete(
+                    collection_name=self.settings.qdrant_collection,
+                    points_selector=models.FilterSelector(filter=models.Filter()),
+                )
+        except Exception as exc:
+            raise VectorStoreError("Failed to truncate vector store") from exc
+
     @staticmethod
     def _point_id(document_hash: str, index: int) -> int:
         hash_bytes = hashlib.sha256(f"{document_hash}:{index}".encode()).digest()

@@ -49,3 +49,6 @@ class DocumentIngestionService:
                 else "Document successfully uploaded and indexed"
             ),
         }
+
+    def truncate(self) -> None:
+        self.repository.truncate()

@@ -29,7 +29,7 @@ app.add_middleware(
     CORSMiddleware,
     # allow_origins=[settings.frontend_origin],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
 )
 app.include_router(documents_router)
