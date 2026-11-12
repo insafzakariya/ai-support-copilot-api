@@ -1,34 +1,29 @@
 import logging
-from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
-from .ai_pipeline import analyze_ticket
 from .api.documents import router as documents_router
 from .api.ask import router as ask_router
-
 from .config import get_settings
-from .schemas import (
-    AnalyzeTicketRequest,
-    FeedbackRequest,
-    MessageResponse,
-    Ticket,
-    TicketAnalysis,
-)
+from .schemas import MessageResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="AI Support Copilot API",
     version="1.0.0",
 )
+app.state.limiter = limiter
 
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=[settings.frontend_origin],
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],

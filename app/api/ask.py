@@ -43,6 +43,7 @@ def get_answer_service(
 
 def _validate_question(question: str, settings: Settings) -> str:
     """Validate and sanitize question input."""
+    question = question.strip()
     if len(question) < settings.question_min_length:
         raise ValueError(f"Question too short (minimum {settings.question_min_length} characters)")
     if len(question) > settings.question_max_length:
@@ -50,11 +51,39 @@ def _validate_question(question: str, settings: Settings) -> str:
 
     injection_patterns = [
         "system:",
-        "ignore:",
+        "ignore previous",
+        "ignore all",
         "override:",
         "forget:",
         "<system>",
         "{{",
+        "[inst]",
+        "###",
+        "human:",
+        "assistant:",
+        "<|system|>",
+        "<|user|>",
+        "developer mode",
+        "jailbreak",
+        "new instruction",
+        "act as if",
+        "pretend you",
+        "you are now",
+        "i am an admin",
+        "clearance level",
+        "bypass",
+        "base64",
+        "decode this",
+        "reveal the",
+        "system instructions",
+        "system prompt",
+        "tell me your system",
+        "tell me the system",
+        "help me hack",
+        "how to hack",
+        "exploit",
+        "breach",
+        "unauthorized access",
     ]
     question_lower = question.lower()
     for pattern in injection_patterns:
@@ -63,6 +92,34 @@ def _validate_question(question: str, settings: Settings) -> str:
 
     normalized = " ".join(question.split())
     return normalized
+
+
+async def _scan_input_with_llm_guard(question: str) -> None:
+    """Scan question for prompt injection and toxicity using llm-guard."""
+    try:
+        from llm_guard.input_scanners import PromptInjection, Toxicity
+        from llm_guard.vault import Vault
+
+        vault = Vault()
+
+        prompt_injection_scanner = PromptInjection(vault=vault)
+        toxicity_scanner = Toxicity(vault=vault)
+
+        is_injection_safe, _, reason = prompt_injection_scanner.scan(question)
+        if not is_injection_safe:
+            logger.warning("ask_request_blocked_prompt_injection", extra={"reason": reason})
+            raise ValueError("Question contains potential prompt injection attack")
+
+        is_toxicity_safe, _, reason = toxicity_scanner.scan(question)
+        if not is_toxicity_safe:
+            logger.warning("ask_request_blocked_toxicity", extra={"reason": reason})
+            raise ValueError("Question contains toxic content")
+
+    except Exception as exc:
+        if isinstance(exc, ValueError):
+            raise
+        logger.debug("llm_guard_scan_error", extra={"error": str(exc)})
+        pass
 
 
 @router.post("/ask", response_model=AskResponse, status_code=status.HTTP_200_OK)
@@ -79,8 +136,10 @@ async def ask_question(
 
     Returns an answer with citations, confidence score, and metadata about the retrieval.
     """
+    guardrails_triggered: list[str] = []
     try:
         sanitized_question = _validate_question(request.question, settings)
+        await _scan_input_with_llm_guard(sanitized_question)
 
         logger.info(
             "ask_request_received",
@@ -135,18 +194,22 @@ async def ask_question(
             answer=answer.text, documents=documents
         )
 
-        confidence = (
-            answer.confidence
-            if answer.confidence >= request.confidence_threshold
-            else answer.confidence
-        )
+        if answer.raw_response.get("output_safety_flagged", False):
+            guardrails_triggered.append("sensitive_data_detection")
+
+        confidence_below_threshold = answer.confidence < request.confidence_threshold
+        if confidence_below_threshold:
+            guardrails_triggered.append("confidence_threshold")
+
+        confidence = answer.confidence
 
         response = AskResponse(
             answer=answer.text,
             citations=citations,
             confidence=confidence,
-            found_relevant_docs=True,
+            found_relevant_docs=not confidence_below_threshold,
             retrieval_method=retrieval_method,
+            guardrails_triggered=guardrails_triggered,
         )
 
         logger.info(
@@ -162,7 +225,20 @@ async def ask_question(
         return response
 
     except ValueError as exc:
-        logger.warning("ask_request_validation_failed", extra={"error": str(exc)})
+        error_msg = str(exc)
+        logger.warning("ask_request_validation_failed", extra={"error": error_msg})
+
+        if "too short" in error_msg.lower():
+            guardrails_triggered.append("input_length_min")
+        elif "too long" in error_msg.lower():
+            guardrails_triggered.append("input_length_max")
+        elif "suspicious patterns" in error_msg.lower():
+            guardrails_triggered.append("prompt_injection_pattern")
+        elif "prompt injection" in error_msg.lower():
+            guardrails_triggered.append("prompt_injection_ml")
+        elif "toxic" in error_msg.lower():
+            guardrails_triggered.append("toxicity_detection")
+
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),

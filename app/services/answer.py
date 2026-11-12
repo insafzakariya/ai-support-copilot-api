@@ -61,6 +61,22 @@ Provide a helpful, accurate answer grounded in the context. If context is insuff
             ]
         )
 
+    async def _scan_output_with_llm_guard(self, answer_text: str) -> tuple[bool, str]:
+        """Scan answer for sensitive data using llm-guard. Returns (is_safe, reason)."""
+        try:
+            from llm_guard.output_scanners import Sensitive
+            from llm_guard.vault import Vault
+
+            vault = Vault()
+            sensitive_scanner = Sensitive(vault=vault)
+
+            is_safe, is_valid, reason = sensitive_scanner.scan(answer_text)
+            return is_safe, reason if not is_safe else ""
+
+        except Exception as exc:
+            logger.debug("llm_guard_output_scan_error", extra={"error": str(exc)})
+            return True, ""
+
     async def generate_answer(
         self, question: str, documents: list[Document]
     ) -> Answer:
@@ -84,7 +100,18 @@ Provide a helpful, accurate answer grounded in the context. If context is insuff
                 {"question": question, "context": context}
             )
 
-            confidence = self._calculate_confidence(documents, response.answer)
+            is_output_safe, scan_reason = await self._scan_output_with_llm_guard(response.answer)
+            output_safety_flagged = False
+            if not is_output_safe:
+                logger.warning(
+                    "answer_contains_sensitive_data",
+                    extra={"reason": scan_reason}
+                )
+                response.answer = "I cannot provide that information."
+                confidence = 0.0
+                output_safety_flagged = True
+            else:
+                confidence = self._calculate_confidence(documents, response.answer)
 
             logger.info(
                 "answer_generation_success",
@@ -93,16 +120,39 @@ Provide a helpful, accurate answer grounded in the context. If context is insuff
                     "context_length": len(context),
                     "answer_length": len(response.answer),
                     "confidence": confidence,
+                    "output_safe": is_output_safe,
                 },
             )
 
             return Answer(
                 text=response.answer,
                 confidence=confidence,
-                raw_response={"model": self.settings.groq_model, "tokens_used": "N/A"},
+                raw_response={
+                    "model": self.settings.groq_model,
+                    "tokens_used": "N/A",
+                    "output_safety_flagged": output_safety_flagged,
+                },
             )
         except Exception as exc:
-            logger.exception("answer_generation_failed")
+            error_msg = str(exc).lower()
+            logger.exception("answer_generation_failed", extra={"error": error_msg})
+
+            if any(phrase in error_msg for phrase in ["tool", "parsing", "output", "failed", "refused"]):
+                fallback_reason = "llm_generation_failed"
+                if "tool" in error_msg and "failed" in error_msg:
+                    fallback_reason = "llm_refusal"
+                elif "parsing" in error_msg or "output" in error_msg:
+                    fallback_reason = "output_parsing_error"
+
+                logger.warning(
+                    "llm_generation_error_fallback",
+                    extra={"reason": fallback_reason, "error": error_msg[:100]}
+                )
+                return Answer(
+                    text="I don't have enough information to answer that question.",
+                    confidence=0.0,
+                    raw_response={"reason": fallback_reason, "model": self.settings.groq_model},
+                )
             raise AnswerGenerationError("Failed to generate answer") from exc
 
     def extract_citations(
@@ -141,16 +191,18 @@ Provide a helpful, accurate answer grounded in the context. If context is insuff
             return []
 
     def _format_context(self, documents: list[Document]) -> str:
-        """Format documents into context string for LLM."""
+        """Format documents into context string for LLM with budget cap."""
         if not documents:
             return "No relevant knowledge-base documents were found."
 
         blocks = []
+        max_chunk_size = 1500
         for idx, doc in enumerate(documents, 1):
+            truncated_content = doc.page_content[:max_chunk_size]
             blocks.append(
                 f"[Document {idx}]\n"
                 f"Title: {doc.metadata.get('source_filename', 'Unknown')}\n"
-                f"Content: {doc.page_content}"
+                f"Content: {truncated_content}"
             )
 
         return "\n\n".join(blocks)

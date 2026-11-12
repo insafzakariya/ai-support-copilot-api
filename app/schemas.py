@@ -65,3 +65,4 @@ class AskResponse(BaseModel):
     confidence: float = Field(ge=0, le=1)
     found_relevant_docs: bool
     retrieval_method: str
+    guardrails_triggered: list[str] = Field(default_factory=list)
