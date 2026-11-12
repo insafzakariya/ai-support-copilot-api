@@ -87,5 +87,4 @@ def analyze_ticket(subject: str, message: str) -> TicketAnalysis:
             "context": format_context(documents),
         }
     )
-
     return result

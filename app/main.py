@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .ai_pipeline import analyze_ticket
+from .api.documents import router as documents_router
 
 from .config import get_settings
 from .schemas import (
@@ -31,6 +32,7 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+app.include_router(documents_router)
 
 
 @app.get("/health", response_model=MessageResponse)

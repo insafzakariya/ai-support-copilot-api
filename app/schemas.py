@@ -29,8 +29,8 @@ class TicketAnalysis(BaseModel):
     confidence: float = Field(ge=0, le=1)
     summary: str
     recommended_action: str
-    draft_response: str
-    citations: list[Citation]
+    # draft_response: str
+    # citations: list[Citation]
 
 
 class FeedbackRequest(BaseModel):
@@ -40,4 +40,13 @@ class FeedbackRequest(BaseModel):
 
 
 class MessageResponse(BaseModel):
+    message: str
+
+
+class DocumentUploadResponse(BaseModel):
+    success: bool
+    document_id: str
+    filename: str
+    total_chunks: int
+    status: Literal["indexed", "already_indexed"]
     message: str
