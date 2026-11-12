@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .ai_pipeline import analyze_ticket
 from .api.documents import router as documents_router
+from .api.ask import router as ask_router
 
 from .config import get_settings
 from .schemas import (
@@ -33,6 +34,7 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 app.include_router(documents_router)
+app.include_router(ask_router)
 
 
 @app.get("/health", response_model=MessageResponse)
@@ -40,15 +42,15 @@ def health_check() -> MessageResponse:
     return MessageResponse(message="ok")
 
 
-@app.post("/api/tickets/analyze", response_model=TicketAnalysis)
-def analyze_ticket_endpoint(payload: AnalyzeTicketRequest) -> TicketAnalysis:
-    logger.info("Analyzing ticket_id=%s", payload.ticket_id)
+# @app.post("/api/tickets/analyze", response_model=TicketAnalysis)
+# def analyze_ticket_endpoint(payload: AnalyzeTicketRequest) -> TicketAnalysis:
+#     logger.info("Analyzing ticket_id=%s", payload.ticket_id)
 
-    try:
-        return analyze_ticket(payload.subject, payload.message)
-    except Exception as exc:
-        logger.exception("Ticket analysis failed")
-        raise HTTPException(
-            status_code=502,
-            detail="The AI analysis service is temporarily unavailable.",
-        )
+#     try:
+#         return analyze_ticket(payload.subject, payload.message)
+#     except Exception as exc:
+#         logger.exception("Ticket analysis failed")
+#         raise HTTPException(
+#             status_code=502,
+#             detail="The AI analysis service is temporarily unavailable.",
+#         )

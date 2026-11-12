@@ -18,8 +18,8 @@ class AnalyzeTicketRequest(BaseModel):
 
 class Citation(BaseModel):
     document_id: str
-    title: str
-    excerpt: str
+    filename: str
+    excerpt: str = Field(..., max_length=200)
 
 
 class TicketAnalysis(BaseModel):
@@ -50,3 +50,18 @@ class DocumentUploadResponse(BaseModel):
     total_chunks: int
     status: Literal["indexed", "already_indexed"]
     message: str
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    confidence_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    include_reranking: bool = Field(default=True)
+
+
+class AskResponse(BaseModel):
+    answer: str
+    citations: list[Citation] = Field(default_factory=list)
+    confidence: float = Field(ge=0, le=1)
+    found_relevant_docs: bool
+    retrieval_method: str

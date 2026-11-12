@@ -18,6 +18,23 @@ class Settings(BaseSettings):
     chunk_size: int = 1200
     chunk_overlap: int = 150
 
+    # Retrieval configuration
+    reranker_enabled: bool = True
+    top_k_default: int = 5
+    top_k_max: int = 20
+    confidence_threshold_default: float = 0.3
+
+    # Question constraints
+    question_min_length: int = 3
+    question_max_length: int = 2000
+
+    # RRF configuration
+    rrf_k: int = 60
+
+    # Reranker model
+    reranker_model: str = "llama-3.3-70b-versatile"
+    reranker_temperature: float = 0.3
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

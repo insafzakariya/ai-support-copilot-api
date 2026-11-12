@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
 
 from langchain_core.documents import Document
@@ -9,6 +10,8 @@ from qdrant_client import QdrantClient, models
 
 from ..config import Settings
 from ..exceptions import VectorStoreError
+
+logger = logging.getLogger(__name__)
 
 
 class QdrantRepository:
@@ -117,6 +120,151 @@ class QdrantRepository:
                 )
         except Exception as exc:
             raise VectorStoreError("Failed to truncate vector store") from exc
+
+    def search_semantic(
+        self,
+        embedding: list[float],
+        top_k: int,
+        filter_dict: dict[str, Any] | None = None,
+    ) -> list[Document]:
+        """
+        Vector similarity search using cosine distance.
+        Returns LangChain Documents with preserved metadata.
+        """
+        try:
+            query_filter = None
+            if filter_dict:
+                query_filter = self._build_filter(filter_dict)
+
+            response = self.client.query_points(
+                collection_name=self.settings.qdrant_collection,
+                query=embedding,
+                using=self.settings.qdrant_vector_name,
+                query_filter=query_filter,
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+            )
+
+            documents = []
+            for point in response.points:
+                payload = point.payload
+                doc = Document(
+                    page_content=payload.get("text", ""),
+                    metadata={
+                        "document_id": payload.get("document_id", ""),
+                        "source_filename": payload.get("source_filename", ""),
+                        "semantic_score": float(point.score) if point.score else 0.0,
+                        "chunk_index": payload.get("chunk_index", 0),
+                        **{
+                            k: v
+                            for k, v in payload.items()
+                            if k
+                            not in {
+                                "text",
+                                "document_id",
+                                "source_filename",
+                                "chunk_index",
+                            }
+                        },
+                    },
+                )
+                documents.append(doc)
+
+            logger.debug(
+                "semantic_search_completed",
+                extra={"top_k": top_k, "results_count": len(documents)},
+            )
+            return documents
+        except Exception as exc:
+            logger.exception("semantic_search_failed")
+            raise VectorStoreError("Semantic search failed") from exc
+
+    def search_keyword(
+        self,
+        keywords: list[str],
+        top_k: int,
+        filter_dict: dict[str, Any] | None = None,
+    ) -> list[Document]:
+        """
+        Keyword-based search using TF scoring.
+        Returns LangChain Documents with keyword scores.
+        """
+        try:
+            query_filter = None
+            if filter_dict:
+                query_filter = self._build_filter(filter_dict)
+
+            scored_docs: list[tuple[Document, float]] = []
+            offset = None
+
+            while True:
+                points, offset = self.client.scroll(
+                    collection_name=self.settings.qdrant_collection,
+                    scroll_filter=query_filter,
+                    limit=100,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+                for point in points:
+                    payload = point.payload
+                    text = payload.get("text", "").lower()
+
+                    keyword_score = sum(
+                        1 for keyword in keywords if keyword.lower() in text
+                    )
+
+                    if keyword_score > 0:
+                        doc = Document(
+                            page_content=payload.get("text", ""),
+                            metadata={
+                                "document_id": payload.get("document_id", ""),
+                                "source_filename": payload.get(
+                                    "source_filename", ""
+                                ),
+                                "keyword_score": float(keyword_score),
+                                "chunk_index": payload.get("chunk_index", 0),
+                                **{
+                                    k: v
+                                    for k, v in payload.items()
+                                    if k
+                                    not in {
+                                        "text",
+                                        "document_id",
+                                        "source_filename",
+                                        "chunk_index",
+                                    }
+                                },
+                            },
+                        )
+                        scored_docs.append((doc, keyword_score))
+
+                if offset is None:
+                    break
+
+            scored_docs.sort(key=lambda x: x[1], reverse=True)
+            documents = [doc for doc, _ in scored_docs[:top_k]]
+
+            logger.debug(
+                "keyword_search_completed",
+                extra={"keywords": keywords, "results_count": len(documents)},
+            )
+            return documents
+        except Exception as exc:
+            logger.exception("keyword_search_failed")
+            raise VectorStoreError("Keyword search failed") from exc
+
+    @staticmethod
+    def _build_filter(filter_dict: dict[str, Any]) -> models.Filter:
+        """Build Qdrant filter from dictionary."""
+        conditions = []
+        for key, value in filter_dict.items():
+            conditions.append(
+                models.HasPayloadCondition(key=key, has_payload=True)
+            )
+        return models.Filter(must=conditions) if conditions else models.Filter()
 
     @staticmethod
     def _point_id(document_hash: str, index: int) -> int:

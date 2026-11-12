@@ -16,3 +16,23 @@ class EmbeddingProviderError(DocumentIngestionError):
 
 class VectorStoreError(DocumentIngestionError):
     pass
+
+
+class RetrievalError(Exception):
+    """Base exception for retrieval failures."""
+
+
+class NoRelevantDocumentsError(RetrievalError):
+    """Raised when no relevant documents found."""
+
+
+class RerankingError(RetrievalError):
+    """Raised when reranking fails."""
+
+
+class AnswerGenerationError(Exception):
+    """Base exception for answer generation failures."""
+
+
+class CitationValidationError(AnswerGenerationError):
+    """Raised when citation validation fails."""
