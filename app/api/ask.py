@@ -15,12 +15,20 @@ from ..services.answer import AnswerService
 from ..services.embeddings import create_embeddings
 from ..services.retrieval import RetrievalService
 
+from llm_guard.input_scanners import PromptInjection, Toxicity
+from llm_guard.vault import Vault
+from ..services.embedding_cache import CachedEmbeddings
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["ask"])
+_cached_embeddings: CachedEmbeddings | None = None
 
 
 def get_embeddings(settings: Settings = Depends(get_settings)):
-    return create_embeddings(settings)
+    global _cached_embeddings
+    if _cached_embeddings is None:
+        _cached_embeddings = create_embeddings(settings)
+    return _cached_embeddings
 
 
 def get_qdrant_repo(settings: Settings = Depends(get_settings)):
@@ -45,9 +53,13 @@ def _validate_question(question: str, settings: Settings) -> str:
     """Validate and sanitize question input."""
     question = question.strip()
     if len(question) < settings.question_min_length:
-        raise ValueError(f"Question too short (minimum {settings.question_min_length} characters)")
+        raise ValueError(
+            f"Question too short (minimum {settings.question_min_length} characters)"
+        )
     if len(question) > settings.question_max_length:
-        raise ValueError(f"Question too long (maximum {settings.question_max_length} characters)")
+        raise ValueError(
+            f"Question too long (maximum {settings.question_max_length} characters)"
+        )
 
     injection_patterns = [
         "system:",
@@ -97,8 +109,6 @@ def _validate_question(question: str, settings: Settings) -> str:
 async def _scan_input_with_llm_guard(question: str) -> None:
     """Scan question for prompt injection and toxicity using llm-guard."""
     try:
-        from llm_guard.input_scanners import PromptInjection, Toxicity
-        from llm_guard.vault import Vault
 
         vault = Vault()
 
@@ -107,7 +117,9 @@ async def _scan_input_with_llm_guard(question: str) -> None:
 
         is_injection_safe, _, reason = prompt_injection_scanner.scan(question)
         if not is_injection_safe:
-            logger.warning("ask_request_blocked_prompt_injection", extra={"reason": reason})
+            logger.warning(
+                "ask_request_blocked_prompt_injection", extra={"reason": reason}
+            )
             raise ValueError("Question contains potential prompt injection attack")
 
         is_toxicity_safe, _, reason = toxicity_scanner.scan(question)
@@ -125,9 +137,7 @@ async def _scan_input_with_llm_guard(question: str) -> None:
 @router.post("/ask", response_model=AskResponse, status_code=status.HTTP_200_OK)
 async def ask_question(
     request: AskRequest,
-    retrieval_service: Annotated[
-        RetrievalService, Depends(get_retrieval_service)
-    ],
+    retrieval_service: Annotated[RetrievalService, Depends(get_retrieval_service)],
     answer_service: Annotated[AnswerService, Depends(get_answer_service)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AskResponse:
@@ -261,3 +271,26 @@ async def ask_question(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         )
+
+
+@router.get("/cache-stats", status_code=status.HTTP_200_OK)
+async def get_cache_stats():
+    """Get embedding cache statistics."""
+    if _cached_embeddings is None:
+        return {"error": "Cache not initialized"}
+
+    stats = _cached_embeddings.get_cache_stats()
+    return {
+        "embedding_cache": stats,
+        "message": "Cache hit rate shows percentage of questions answered from cache"
+    }
+
+
+@router.post("/cache-clear", status_code=status.HTTP_200_OK)
+async def clear_cache():
+    """Clear the embedding cache."""
+    if _cached_embeddings is None:
+        return {"error": "Cache not initialized"}
+
+    _cached_embeddings.clear_cache()
+    return {"message": "Embedding cache cleared"}

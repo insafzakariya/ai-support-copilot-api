@@ -8,6 +8,11 @@ from ..config import Settings
 from ..exceptions import NoRelevantDocumentsError, RetrievalError
 from ..repositories.qdrant_repository import QdrantRepository
 
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+import json
+import re
+
 logger = logging.getLogger(__name__)
 
 
@@ -194,10 +199,6 @@ class RetrievalService:
             ]
 
         try:
-            from langchain_groq import ChatGroq
-            from langchain_core.prompts import ChatPromptTemplate
-            import json
-            import re
 
             reranker = ChatGroq(
                 model=self.settings.reranker_model,
